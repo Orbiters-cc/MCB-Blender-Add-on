@@ -1,0 +1,8 @@
+dist/
+__pycache__/
+*.pyc
+*.pyo
+*.blend1
+*.fbx
+*.zip
+.idea/
