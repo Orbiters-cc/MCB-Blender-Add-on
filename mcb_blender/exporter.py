@@ -18,9 +18,29 @@ EXPORT_KIND = "orbiters.mcb.blenderExport"
 READY_KIND = "orbiters.mcb.blenderExportReady"
 PROTOCOL_VERSION = 1
 SAVE_SYNC_DELAY_SECONDS = 1.5
+TARGET_FBX_PROP = "mcb_target_fbx_path"
+TARGET_MESH_PROP = "mcb_target_mesh_name"
+TARGET_RENDERER_PROP = "mcb_target_renderer_name"
 
 _IS_EXPORTING = False
 _SAVE_SYNC_TIMER_PENDING = False
+
+
+def _normalize_unity_path(path):
+    return (path or "").replace("\\", "/").lower()
+
+
+def _target_path_matches(left, right):
+    return bool(left and right and _normalize_unity_path(left) == _normalize_unity_path(right))
+
+
+def _mesh_tag_value(obj, key):
+    value = obj.get(key, "") if obj is not None else ""
+    return value if isinstance(value, str) else ""
+
+
+def _mesh_tag_target_path(obj):
+    return _mesh_tag_value(obj, TARGET_FBX_PROP)
 
 
 def _find_default_body(context):
@@ -194,7 +214,12 @@ def _strip_blender_suffix(name):
 
 def _mesh_candidate_names(obj):
     names = []
-    for value in (getattr(obj, "name", ""), getattr(getattr(obj, "data", None), "name", "")):
+    for value in (
+        _mesh_tag_value(obj, TARGET_MESH_PROP),
+        _mesh_tag_value(obj, TARGET_RENDERER_PROP),
+        getattr(obj, "name", ""),
+        getattr(getattr(obj, "data", None), "name", ""),
+    ):
         if not value:
             continue
         names.append(value)
@@ -202,6 +227,38 @@ def _mesh_candidate_names(obj):
         if stripped and stripped != value:
             names.append(stripped)
     return names
+
+
+def _target_known_names(target):
+    names = []
+    names.extend(_target_declared_mesh_names(target))
+    data = target.get("data") if isinstance(target, dict) else target
+    if isinstance(data, dict):
+        for entry in data.get("smrPaths") or []:
+            if not isinstance(entry, dict):
+                continue
+            for value in _target_entry_names(entry):
+                if value:
+                    names.append(value)
+    return names
+
+
+def _tagged_meshes_for_target(context, target):
+    path = target.get("path") if isinstance(target, dict) else ""
+    if not path:
+        return []
+
+    names = set(_target_known_names(target))
+    tagged = []
+    for obj in context.scene.objects:
+        if obj.type != "MESH" or getattr(obj, "Muscle_XID", False):
+            continue
+        if not _target_path_matches(_mesh_tag_target_path(obj), path):
+            continue
+        if names and not names.intersection(_mesh_candidate_names(obj)):
+            continue
+        tagged.append(obj)
+    return tagged
 
 
 def _scene_mesh_lookup(context):
@@ -218,8 +275,18 @@ def find_export_meshes(context, session):
     meshes = []
     missing = []
     seen = set()
-    lookup = _scene_mesh_lookup(context)
     target_files = _target_files(session)
+
+    for target in target_files:
+        for obj in _tagged_meshes_for_target(context, target):
+            if obj.name not in seen:
+                meshes.append(obj)
+                seen.add(obj.name)
+
+    if meshes:
+        return meshes, missing
+
+    lookup = _scene_mesh_lookup(context)
     declared_names = []
     for target in target_files:
         declared_names.extend(_target_declared_mesh_names(target))
@@ -275,6 +342,16 @@ def _mesh_groups_by_target(session, mesh_objects):
     groups = []
 
     for target in target_files:
+        tagged = [
+            obj
+            for obj in mesh_objects
+            if obj.name not in assigned and _target_path_matches(_mesh_tag_target_path(obj), target["path"])
+        ]
+        if tagged:
+            groups.append({"targetFbxPath": target["path"], "meshes": tagged})
+            assigned.update(obj.name for obj in tagged)
+            continue
+
         names = _target_declared_mesh_names(target)
         if not names:
             names = []
@@ -310,6 +387,17 @@ def _target_paths_for_meshes(session, mesh_objects):
 
     target_paths = []
     seen = set()
+
+    for obj in mesh_objects:
+        tagged_path = _mesh_tag_target_path(obj)
+        if tagged_path:
+            for target in _target_files(session):
+                if _target_path_matches(tagged_path, target["path"]) and target["path"] not in seen:
+                    target_paths.append(target["path"])
+                    seen.add(target["path"])
+
+    if target_paths:
+        return target_paths
 
     for target in _target_files(session):
         declared_names = set(_target_declared_mesh_names(target))
@@ -356,7 +444,11 @@ def _meshes_for_target_paths(session, all_mesh_objects, target_paths):
     selected = []
     seen = set()
     for obj in all_mesh_objects:
-        if any(name in wanted_names for name in _mesh_candidate_names(obj)):
+        tagged_path = _mesh_tag_target_path(obj)
+        if any(_target_path_matches(tagged_path, path) for path in wanted_paths):
+            selected.append(obj)
+            seen.add(obj.name)
+        elif any(name in wanted_names for name in _mesh_candidate_names(obj)):
             selected.append(obj)
             seen.add(obj.name)
 
@@ -367,14 +459,14 @@ def _filter_meshes_for_request(session, mesh_objects, requested_mesh_name):
     if not requested_mesh_name:
         return mesh_objects, ""
 
-    selected, display_names = _filter_meshes_for_requests(session, mesh_objects, [requested_mesh_name])
+    selected, display_names, _refresh_names = _filter_meshes_for_requests(session, mesh_objects, [requested_mesh_name])
     return selected, (display_names[0] if display_names else "")
 
 
 def _filter_meshes_for_requests(session, mesh_objects, requested_mesh_names):
     requested_names = [name for name in (requested_mesh_names or []) if name]
     if not requested_names:
-        return mesh_objects, []
+        return mesh_objects, [], []
 
     requested = []
     display_names = []
@@ -385,11 +477,22 @@ def _filter_meshes_for_requests(session, mesh_objects, requested_mesh_names):
             display_names.append(obj.name)
 
     if not requested:
-        return [], []
+        return [], [], []
 
     target_paths = _target_paths_for_meshes(session, requested)
     group_meshes = _meshes_for_target_paths(session, mesh_objects, target_paths)
-    return group_meshes, display_names
+    return group_meshes, display_names, _manifest_mesh_names(requested)
+
+
+def _manifest_mesh_names(mesh_objects):
+    names = []
+    seen = set()
+    for obj in mesh_objects or []:
+        for name in _mesh_candidate_names(obj):
+            if name and name not in seen:
+                names.append(name)
+                seen.add(name)
+    return names
 
 
 def export_mesh_report(context, session):
@@ -481,7 +584,7 @@ def _send_to_unity(context, requested_mesh_names=None, automatic=False):
         return False, "Magic Sync session has no Unity inbox"
 
     mesh_objects, missing_mesh_names = find_export_meshes(context, session)
-    mesh_objects, requested_display_names = _filter_meshes_for_requests(session, mesh_objects, requested_mesh_names)
+    mesh_objects, requested_display_names, refresh_mesh_names = _filter_meshes_for_requests(session, mesh_objects, requested_mesh_names)
     if not mesh_objects:
         return False, "No Blender meshes matched the Unity target FBX renderer list"
 
@@ -513,7 +616,7 @@ def _send_to_unity(context, requested_mesh_names=None, automatic=False):
     models_dir = export_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
 
-    mesh_names = [obj.name for obj in mesh_objects]
+    mesh_names = _manifest_mesh_names(mesh_objects)
     mesh_groups = _mesh_groups_by_target(session, mesh_objects)
     model_entries = []
     _IS_EXPORTING = True
@@ -532,7 +635,7 @@ def _send_to_unity(context, requested_mesh_names=None, automatic=False):
                     "targetFbxPath": target_fbx_path,
                     "primaryBodyObject": body_obj.name,
                     "armatureObject": armature_obj.name if armature_obj else "",
-                    "meshNames": [obj.name for obj in group_meshes],
+                    "meshNames": refresh_mesh_names or _manifest_mesh_names(group_meshes),
                     "missingUnityTargetMeshNames": missing_mesh_names,
                     "shapeKeysByMesh": _shape_keys_by_mesh(group_meshes),
                     "armatureBones": _armature_bone_names(armature_obj),
@@ -743,14 +846,11 @@ def initialize_dirty_tracking_baseline_for_scene(scene):
 def _mark_meshes_clean(scene, settings, mesh_objects):
     if scene is None or settings is None:
         return
-    signatures = _load_dirty_signatures(settings)
     dirty = set(_dirty_mesh_names(settings))
     for obj in mesh_objects or []:
         if obj is None:
             continue
-        signatures[obj.name] = _mesh_signature(obj)
         dirty.discard(obj.name)
-    _set_dirty_signatures(settings, signatures)
     _set_dirty_mesh_names(settings, dirty)
 
 
@@ -765,28 +865,10 @@ def _mark_dirty_meshes(scene, mesh_names):
         mesh_names = [name for name in mesh_names if name in target_mesh_names]
         if not mesh_names:
             return
-    signatures = _load_dirty_signatures(settings)
-    current_signatures = _mesh_signature_map_for_names(scene, settings, mesh_names)
-    if current_signatures and not signatures:
-        signatures = _target_mesh_signature_map(scene, settings)
-        _set_dirty_signatures(settings, signatures)
-        _set_dirty_mesh_names(settings, [])
-        return
 
     dirty = set(dirty_mesh_name_set(settings, scene))
     for name in mesh_names:
-        signature = current_signatures.get(name)
-        if not signature:
-            continue
-        baseline = signatures.get(name)
-        if baseline is None:
-            signatures[name] = signature
-            dirty.discard(name)
-        elif baseline != signature:
-            dirty.add(name)
-        else:
-            dirty.discard(name)
-    _set_dirty_signatures(settings, signatures)
+        dirty.add(name)
     _set_dirty_mesh_names(settings, dirty)
 
 
@@ -828,6 +910,8 @@ def _depsgraph_update_handler(scene, depsgraph):
     for update in depsgraph.updates:
         data_block = update.id
         if isinstance(data_block, bpy.types.Object):
+            if not getattr(update, "is_updated_geometry", True):
+                continue
             if data_block.type == "MESH" and not getattr(data_block, "Muscle_XID", False):
                 dirty_names.add(data_block.name)
         elif isinstance(data_block, bpy.types.Mesh):

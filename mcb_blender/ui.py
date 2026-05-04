@@ -124,6 +124,10 @@ class MCB_PT_panel(bpy.types.Panel):
         if session:
             col.label(text="Unity: " + (settings.unity_project_path or "Unknown"), icon="LINKED")
             col.label(text="Custom Base: " + (settings.custom_base_name or "Custom Base"), icon="OUTLINER_OB_ARMATURE")
+            if settings.blender_project_path:
+                col.label(text="Project: " + Path(settings.blender_project_path).name, icon="FILE_BLEND")
+            if settings.unity_exports_path:
+                col.label(text="Exports: " + settings.unity_exports_path, icon="FILE_FOLDER")
         elif pending_offer:
             wait_row = col.row(align=True)
             wait_row.operator("mcb.check_magic_sync_response", text="", icon="FILE_REFRESH")

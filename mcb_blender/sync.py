@@ -38,6 +38,9 @@ def apply_sync_session(settings, data):
     settings.unity_project_path = data.get("unityProjectPath", "") or ""
     settings.unity_inbox_path = data.get("inboxPath", "") or ""
     settings.heartbeat_path = data.get("heartbeatPath", "") or ""
+    project = data.get("blenderProject") if isinstance(data.get("blenderProject"), dict) else {}
+    settings.blender_project_path = project.get("projectAbsolutePath", "") or project.get("absolutePath", "") or ""
+    settings.unity_exports_path = project.get("exportsUnityPath", "") or project.get("exportsAbsolutePath", "") or ""
     ui = data.get("ui") if isinstance(data.get("ui"), dict) else {}
     user = ui.get("user") if isinstance(ui.get("user"), dict) else {}
     settings.ui_banner_path = ui.get("bannerPath", "") or ""
@@ -296,6 +299,8 @@ class MCB_OT_clear_magic_sync(bpy.types.Operator):
         settings.unity_project_path = ""
         settings.unity_inbox_path = ""
         settings.heartbeat_path = ""
+        settings.blender_project_path = ""
+        settings.unity_exports_path = ""
         settings.ui_banner_path = ""
         settings.ui_avatar_path = ""
         settings.ui_user_name = ""

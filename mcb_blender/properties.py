@@ -17,14 +17,6 @@ def _sync_on_save_update(self, _context):
     self.dirty_mesh_signatures_json = ""
     self.sync_on_save_ignore_until = time.time() + 1.5
     self.last_status = "Sync on Save enabled" if self.sync_on_save else "Sync on Save disabled"
-    scene = getattr(_context, "scene", None)
-    if self.sync_on_save and scene is not None:
-        def _initialize_baseline():
-            from .exporter import initialize_dirty_tracking_baseline_for_scene
-            initialize_dirty_tracking_baseline_for_scene(scene)
-            return None
-
-        bpy.app.timers.register(_initialize_baseline, first_interval=0.2)
 
 
 class MCB_Settings(bpy.types.PropertyGroup):
@@ -65,6 +57,8 @@ class MCB_Settings(bpy.types.PropertyGroup):
     unity_project_path: StringProperty(name="Unity Project", default="")
     unity_inbox_path: StringProperty(name="Unity Inbox", default="")
     heartbeat_path: StringProperty(name="Heartbeat Path", default="")
+    blender_project_path: StringProperty(name="Blender Project", default="")
+    unity_exports_path: StringProperty(name="Unity Export Folder", default="")
     ui_banner_path: StringProperty(name="Banner Path", default="")
     ui_avatar_path: StringProperty(name="Avatar Path", default="")
     ui_user_name: StringProperty(name="Unity User", default="")
