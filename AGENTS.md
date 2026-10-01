@@ -10,7 +10,8 @@ This repository contains the Blender-side MCB bridge addon. It is a generic cust
 - Keep FBX/package export logic in `mcb_blender/exporter.py`.
 - Keep optional XMuscle Orbit Helper integration in `mcb_blender/xmuscle_bridge.py`.
 - Keep UI drawing in `mcb_blender/ui.py`.
-- Do not import XMuscle Orbit Helper at module import time. Import it lazily only when exporting with muscle automation enabled.
+- Do not import XMuscle Orbit Helper at module import time. Import its `api` module lazily through `xmuscle_bridge.get_xmuscle_api()`, which also checks the supported API version.
+- `sync.PROTOCOL_VERSION` is the only protocol version of the Unity payloads; accept exactly that version (`sync.protocol_mismatch`), never older ones.
 
 ## Export Rules
 

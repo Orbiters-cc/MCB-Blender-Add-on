@@ -11,12 +11,11 @@ import bpy
 from bpy.app.handlers import persistent
 from bpy.props import StringProperty
 
-from .sync import ADDON_VERSION, get_settings, get_sync_session
+from .sync import ADDON_VERSION, PROTOCOL_VERSION, get_settings, get_sync_session
 from . import xmuscle_bridge
 
 EXPORT_KIND = "orbiters.mcb.blenderExport"
 READY_KIND = "orbiters.mcb.blenderExportReady"
-PROTOCOL_VERSION = 1
 SAVE_SYNC_DELAY_SECONDS = 1.5
 TARGET_FBX_PROP = "mcb_target_fbx_path"
 TARGET_MESH_PROP = "mcb_target_mesh_name"
@@ -636,20 +635,6 @@ def _send_to_unity(context, requested_mesh_names=None, automatic=False):
     if armature_obj is not None:
         settings.armature_object = armature_obj
 
-    xmuscle_result = {
-        "available": False,
-        "baked": False,
-        "warnings": [],
-        "muscles": [],
-    }
-    if settings.include_xmuscle and body_obj.name == "Body":
-        xmuscle_result = xmuscle_bridge.bake_for_export(
-            context,
-            body_obj,
-            armature_obj,
-            force_rebake=settings.xmuscle_force_rebake,
-        )
-
     timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     export_dir = Path(inbox_path) / ("export_" + timestamp)
     models_dir = export_dir / "models"
@@ -660,8 +645,19 @@ def _send_to_unity(context, requested_mesh_names=None, automatic=False):
     model_entries = []
     transport_format = NATIVE_MESH_PAYLOAD_FORMAT if use_native_mesh_payload else FBX_TRANSPORT_FORMAT
     unity_import_mode = "nativeMeshPayload" if use_native_mesh_payload else "fbxReplace"
+    xmuscle_result = None
+    # Baking poses the rig: its depsgraph updates must not mark other target meshes dirty.
     _IS_EXPORTING = True
     try:
+        if settings.include_xmuscle:
+            # Every exported target mesh: the toolkit bakes the ones X-Muscles are linked to.
+            xmuscle_result = xmuscle_bridge.bake_for_export(
+                context,
+                mesh_objects,
+                armature_obj,
+                force_rebake=settings.xmuscle_force_rebake,
+            )
+
         for index, group in enumerate(mesh_groups, start=1):
             group_meshes = group["meshes"]
             target_fbx_path = group.get("targetFbxPath") or _target_fbx_path(session, [obj.name for obj in group_meshes])
@@ -736,7 +732,7 @@ def _send_to_unity(context, requested_mesh_names=None, automatic=False):
         },
     )
 
-    warnings = xmuscle_result.get("warnings") or []
+    warnings = (xmuscle_result or {}).get("warnings") or []
     prefix = "Auto-synced " if automatic else "Synced "
     transport_label = "advanced mesh transfer(s)" if use_native_mesh_payload else "FBX export(s)"
     if requested_display_names:

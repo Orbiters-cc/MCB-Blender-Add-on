@@ -161,15 +161,16 @@ class MCB_PT_panel(bpy.types.Panel):
             if missing_names:
                 col.label(text=str(len(missing_names)) + " Unity target mesh name(s) missing", icon="INFO")
 
-        xmuscle_available = xmuscle_bridge.is_xmuscle_available(context)
+        xmuscle_api = xmuscle_bridge.get_xmuscle_api()
         xrow = col.row(align=True)
         xrow.prop(settings, "include_xmuscle")
-        if not xmuscle_available:
-            xrow.enabled = False
-        if settings.include_xmuscle and xmuscle_available:
-            col.prop(settings, "xmuscle_force_rebake")
+        xrow.enabled = xmuscle_api is not None
+        if settings.include_xmuscle and xmuscle_api is None:
+            col.label(text=f"XMuscle Orbit Helper (API {xmuscle_bridge.SUPPORTED_TOOLKIT_API_VERSION}) is not enabled", icon="INFO")
         elif settings.include_xmuscle:
-            col.label(text="XMuscle Orbit Helper API not found", icon="INFO")
+            col.prop(settings, "xmuscle_force_rebake")
+            if not xmuscle_api.is_available():
+                col.label(text="X-Muscle System is off: only earlier bakes are sent", icon="INFO")
 
         col.separator()
         button_text = "Sync with Unity"

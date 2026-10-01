@@ -8,10 +8,13 @@ from pathlib import Path
 
 import bpy
 
+from . import xmuscle_bridge
+
 MAGIC_SYNC_KIND = "orbiters.mcb.magicSync"
 MAGIC_SYNC_OFFER_KIND = "orbiters.mcb.blenderMagicSyncOffer"
 HEARTBEAT_KIND = "orbiters.mcb.blenderHeartbeat"
-PROTOCOL_VERSION = 1
+# The one protocol version of every Unity <-> Blender payload (sync, launch, export, heartbeat).
+PROTOCOL_VERSION = 2
 HEARTBEAT_INTERVAL_SECONDS = 1.0
 
 
@@ -22,6 +25,18 @@ def _read_addon_version():
 
 # The extension manifest is the only place the version is written.
 ADDON_VERSION = _read_addon_version()
+
+
+def protocol_mismatch(data):
+    """Why a Unity payload cannot be used by this extension, or "" when it uses PROTOCOL_VERSION."""
+    try:
+        version = int(data.get("protocolVersion", 0))
+    except (TypeError, ValueError):
+        version = 0
+    if version == PROTOCOL_VERSION:
+        return ""
+    outdated = "the MCB Blender extension" if version > PROTOCOL_VERSION else "the MCB Unity package"
+    return f"Unity MCB uses sync protocol {version} and this extension protocol {PROTOCOL_VERSION}: update {outdated}"
 
 
 def get_settings(context):
@@ -83,6 +98,9 @@ def write_heartbeat(settings):
                     "token": session.get("token", ""),
                     "updatedAtUtc": datetime.datetime.utcnow().isoformat() + "Z",
                     "blendFile": bpy.data.filepath,
+                    "blenderVersion": bpy.app.version_string,
+                    "addonVersion": ADDON_VERSION,
+                    **xmuscle_bridge.environment_status(),
                 },
                 handle,
                 indent=2,
@@ -142,8 +160,9 @@ def poll_pending_sync_response(settings):
     if data.get("kind") != MAGIC_SYNC_KIND:
         settings.last_status = "Pending Unity response is not an MCB Magic Sync payload"
         return False
-    if int(data.get("protocolVersion", 0)) > PROTOCOL_VERSION:
-        settings.last_status = "Unity uses a newer MCB sync protocol"
+    mismatch = protocol_mismatch(data)
+    if mismatch:
+        settings.last_status = mismatch
         return False
     if data.get("blenderOfferSessionId") != offer.get("sessionId") or data.get("blenderOfferToken") != offer.get("token"):
         settings.last_status = "Pending Unity response does not match this Blender sync offer"
@@ -181,8 +200,9 @@ def _try_connect_from_clipboard(context, settings):
     if data.get("kind") != MAGIC_SYNC_KIND:
         return False, "Clipboard JSON is not an MCB Magic Sync payload"
 
-    if int(data.get("protocolVersion", 0)) > PROTOCOL_VERSION:
-        return False, "Unity uses a newer MCB sync protocol"
+    mismatch = protocol_mismatch(data)
+    if mismatch:
+        return False, mismatch
 
     if not data.get("inboxPath") or not data.get("sessionId") or not data.get("token"):
         return False, "Magic Sync payload is missing inbox/session data"

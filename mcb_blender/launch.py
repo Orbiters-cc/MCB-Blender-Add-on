@@ -5,10 +5,9 @@ from pathlib import Path
 
 import bpy
 
-from .sync import apply_sync_session, write_heartbeat
+from .sync import apply_sync_session, protocol_mismatch, write_heartbeat
 
 LAUNCH_KIND = "orbiters.mcb.blenderLaunch"
-PROTOCOL_VERSION = 1
 TARGET_FBX_PROP = "mcb_target_fbx_path"
 TARGET_MESH_PROP = "mcb_target_mesh_name"
 TARGET_RENDERER_PROP = "mcb_target_renderer_name"
@@ -338,8 +337,9 @@ def run_launch_config(config_path):
 
     if config.get("kind") != LAUNCH_KIND:
         raise RuntimeError("Launch config is not an MCB Blender launch payload.")
-    if int(config.get("protocolVersion", 0)) > PROTOCOL_VERSION:
-        raise RuntimeError("Unity uses a newer MCB Blender launch protocol.")
+    mismatch = protocol_mismatch(config)
+    if mismatch:
+        raise RuntimeError(mismatch)
 
     session = config.get("syncSession")
     if not isinstance(session, dict):

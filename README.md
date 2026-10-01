@@ -24,7 +24,11 @@ You can also start from Blender: click `Start Sync`, then click `Sync with Blend
 
 ## XMuscle Orbit Helper
 
-If XMuscle Orbit Helper is installed and `Include XMuscle deformation` is enabled, MCB calls its public API to bake muscle deformation before export and includes the generated metadata in the manifest.
+If XMuscle Orbit Helper (API 1) is enabled and `Include XMuscle deformation` is on, every export asks it to bake the X-Muscles linked to the exported target meshes (only missing bakes, all of them with `Force muscle rebake`) and writes what it returns to `manifest.xmuscle`: `{apiVersion, muscles: [{name, bone, axis, samples: [{shapeKey, mesh, angleDeg}]}], warnings}`. Without the toolkit, `xmuscle` is `null`. The heartbeat tells Unity whether the X-Muscle System (`xmusclesystem`) and XMuscle Orbit Helper are installed and enabled, and their versions.
+
+## Protocol
+
+Every payload between Unity and Blender (sync offer and session, launch config, export manifest and `ready.json`, heartbeat) carries `protocolVersion` 2. Each side only accepts its own version and names the side to update otherwise.
 
 ## Development
 
