@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import tomllib
 import uuid
 import datetime
 from pathlib import Path
@@ -12,6 +13,15 @@ MAGIC_SYNC_OFFER_KIND = "orbiters.mcb.blenderMagicSyncOffer"
 HEARTBEAT_KIND = "orbiters.mcb.blenderHeartbeat"
 PROTOCOL_VERSION = 1
 HEARTBEAT_INTERVAL_SECONDS = 1.0
+
+
+def _read_addon_version():
+    with open(Path(__file__).with_name("blender_manifest.toml"), "rb") as handle:
+        return tomllib.load(handle)["version"]
+
+
+# The extension manifest is the only place the version is written.
+ADDON_VERSION = _read_addon_version()
 
 
 def get_settings(context):
@@ -154,28 +164,7 @@ class MCB_OT_start_magic_sync(bpy.types.Operator):
             self.report({"ERROR"}, "MCB settings are unavailable")
             return {"CANCELLED"}
 
-        session_id = uuid.uuid4().hex
-        token = uuid.uuid4().hex
-        response_dir = Path(tempfile.gettempdir()) / "orbiters_mcb_blender_sync" / session_id
-        response_dir.mkdir(parents=True, exist_ok=True)
-        response_path = response_dir / "unity_response.json"
-
-        offer = {
-            "kind": MAGIC_SYNC_OFFER_KIND,
-            "protocolVersion": PROTOCOL_VERSION,
-            "sessionId": session_id,
-            "token": token,
-            "responsePath": str(response_path),
-            "blenderBlendFile": bpy.data.filepath,
-            "blenderAddon": "MCB",
-            "blenderAddonVersion": "0.1.0",
-        }
-
-        settings.pending_sync_offer_json = json.dumps(offer, sort_keys=True)
-        settings.pending_sync_response_path = str(response_path)
-        settings.last_status = "Blender Magic Sync copied. Click Sync with Blender in Unity."
-        context.window_manager.clipboard = json.dumps(offer, indent=2, sort_keys=True)
-        self.report({"INFO"}, settings.last_status)
+        self.report({"INFO"}, _start_sync_offer(context, settings))
         return {"FINISHED"}
 
 
@@ -217,7 +206,7 @@ def _start_sync_offer(context, settings):
         "responsePath": str(response_path),
         "blenderBlendFile": bpy.data.filepath,
         "blenderAddon": "MCB",
-        "blenderAddonVersion": "0.1.0",
+        "blenderAddonVersion": ADDON_VERSION,
     }
 
     settings.pending_sync_offer_json = json.dumps(offer, sort_keys=True)

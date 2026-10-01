@@ -14,16 +14,6 @@ from .sync import (
 from .exporter import MCB_OT_send_to_unity, register_save_handlers, unregister_save_handlers
 from .ui import MCB_PT_panel, register_previews, unregister_previews
 
-bl_info = {
-    "name": "MCB",
-    "author": "blackorbit",
-    "version": (0, 1, 0),
-    "blender": (5, 0, 0),
-    "location": "View3D > Sidebar > MCB",
-    "description": "Magic Sync bridge for sending Blender custom bases to Unity MCB",
-    "category": "Import-Export",
-}
-
 ALL_CLASSES = (
     MCB_Settings,
     MCB_OT_smart_magic_sync,

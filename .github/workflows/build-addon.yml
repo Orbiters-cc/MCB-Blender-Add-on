@@ -1,9 +1,9 @@
-name: Build Blender Addon
+name: Build Blender Extension
 
 on:
   push:
     branches:
-      - main
+      - master
     tags:
       - "v*"
   pull_request:
@@ -19,29 +19,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Read addon version
+      - name: Read extension version
         id: version
         run: |
-          python - <<'PY'
-          import pathlib
-          import re
+          python3 - <<'PY'
           import os
+          import tomllib
 
-          text = pathlib.Path("mcb_blender/__init__.py").read_text(encoding="utf-8")
-          match = re.search(r'"version"\s*:\s*\(([^)]*)\)', text)
-          if not match:
-              raise SystemExit("Could not find bl_info version in mcb_blender/__init__.py")
-          version = ".".join(part.strip() for part in match.group(1).split(",") if part.strip())
+          with open("mcb_blender/blender_manifest.toml", "rb") as handle:
+              version = tomllib.load(handle)["version"]
+          ref = os.environ.get("GITHUB_REF", "")
+          if ref.startswith("refs/tags/v") and ref[len("refs/tags/v"):] != version:
+              raise SystemExit(f"Tag {ref} does not match the manifest version {version}")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"version={version}\n")
           PY
 
-      - name: Package addon
+      - name: Package extension
         run: |
           mkdir -p dist
           find mcb_blender -type d -name __pycache__ -prune -exec rm -rf {} +
-          zip -r "dist/mcb_blender-${{ steps.version.outputs.version }}.zip" mcb_blender \
-            -x "*/__pycache__/*" "*.pyc" "*.pyo"
+          # Blender extension layout: blender_manifest.toml at the archive root.
+          cd mcb_blender
+          zip -r "../dist/mcb_blender-${{ steps.version.outputs.version }}.zip" . -x "*.pyc" "*.pyo"
 
       - name: Upload versioned artifact
         uses: actions/upload-artifact@v4

@@ -1,22 +1,21 @@
 @echo off
 setlocal
 
+rem Builds dist\mcb_blender-<version>.zip with Blender's extension builder, which also validates the manifest.
+rem Usage: package_addon.bat [path\to\blender.exe]   (or set BLENDER; defaults to blender on PATH)
+
 set "ROOT=%~dp0"
 set "DIST=%ROOT%dist"
-set "ZIP=%DIST%\mcb_blender.zip"
+set "BLENDER_EXE=%~1"
+if "%BLENDER_EXE%"=="" set "BLENDER_EXE=%BLENDER%"
+if "%BLENDER_EXE%"=="" set "BLENDER_EXE=blender"
 
 if not exist "%DIST%" mkdir "%DIST%"
-if exist "%ZIP%" del "%ZIP%"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "Get-ChildItem -Path '%ROOT%mcb_blender' -Directory -Recurse -Filter '__pycache__' -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | ForEach-Object { if (Test-Path -LiteralPath $_.FullName) { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue } }"
-
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "Compress-Archive -Path '%ROOT%mcb_blender' -DestinationPath '%ZIP%' -Force"
-
+"%BLENDER_EXE%" --factory-startup --command extension build --source-dir "%ROOT%mcb_blender" --output-dir "%DIST%"
 if errorlevel 1 (
-  echo Failed to build addon zip.
+  echo Failed to build the extension zip. Pass the Blender executable as the first argument or set BLENDER.
   exit /b 1
 )
 
-echo Built %ZIP%
+echo Built the extension zip in %DIST%

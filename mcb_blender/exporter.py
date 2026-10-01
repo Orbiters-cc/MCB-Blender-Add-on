@@ -11,7 +11,7 @@ import bpy
 from bpy.app.handlers import persistent
 from bpy.props import StringProperty
 
-from .sync import get_settings, get_sync_session
+from .sync import ADDON_VERSION, get_settings, get_sync_session
 from . import xmuscle_bridge
 
 EXPORT_KIND = "orbiters.mcb.blenderExport"
@@ -703,7 +703,7 @@ def _send_to_unity(context, requested_mesh_names=None, automatic=False):
         "source": {
             "blendFile": bpy.data.filepath,
             "addon": "MCB",
-            "addonVersion": "0.1.0",
+            "addonVersion": ADDON_VERSION,
         },
         "target": {
             "unityProjectPath": session.get("unityProjectPath", ""),

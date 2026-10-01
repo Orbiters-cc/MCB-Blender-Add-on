@@ -1,0 +1,23 @@
+schema_version = "1.0.0"
+
+# The add-on version lives only here: the add-on reads it at runtime (sync.ADDON_VERSION),
+# the release workflow names the zip after it, and Unity MCB expects it (BlenderAddonService).
+id = "mcb_blender"
+version = "0.1.0"
+name = "MCB"
+tagline = "Magic Sync bridge for sending Blender custom bases to Unity MCB"
+maintainer = "blackorbit"
+type = "add-on"
+
+website = "https://github.com/Orbiters-cc/MCB-Blender-Add-on"
+tags = ["Import-Export", "Pipeline"]
+
+blender_version_min = "5.0.0"
+
+license = [
+  "SPDX:MIT",
+]
+
+[permissions]
+files = "Export custom base FBX files and sync data to the Unity project"
+clipboard = "Exchange Magic Sync connection data with Unity"
