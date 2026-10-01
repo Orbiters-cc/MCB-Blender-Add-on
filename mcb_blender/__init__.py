@@ -13,6 +13,7 @@ from .sync import (
 )
 from .exporter import MCB_OT_send_to_unity, register_save_handlers, unregister_save_handlers
 from .ui import MCB_PT_panel, register_previews, unregister_previews
+from . import live
 
 ALL_CLASSES = (
     MCB_Settings,
@@ -33,9 +34,11 @@ def register():
     register_previews()
     register_heartbeat_timer()
     register_save_handlers()
+    live.register()
 
 
 def unregister():
+    live.unregister()
     unregister_save_handlers()
     unregister_heartbeat_timer()
     unregister_previews()

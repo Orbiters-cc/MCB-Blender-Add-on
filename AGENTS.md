@@ -9,6 +9,7 @@ This repository contains the Blender-side MCB bridge addon. It is a generic cust
 - Keep Unity sync/session parsing in `mcb_blender/sync.py`.
 - Keep FBX/package export logic in `mcb_blender/exporter.py`.
 - Keep optional XMuscle Orbit Helper integration in `mcb_blender/xmuscle_bridge.py`.
+- Keep the live link to Unity (live preview, its own protocol specified in Unity MCB's `BlenderLiveProtocol.cs`) in `mcb_blender/live.py`. It runs on the main thread only (non-blocking socket polled by a timer) and reuses the exporter's change detection (`exporter.updated_mesh_names`) and export path.
 - Keep UI drawing in `mcb_blender/ui.py`.
 - Do not import XMuscle Orbit Helper at module import time. Import its `api` module lazily through `xmuscle_bridge.get_xmuscle_api()`, which also checks the supported API version.
 - `sync.PROTOCOL_VERSION` is the only protocol version of the Unity payloads; accept exactly that version (`sync.protocol_mismatch`), never older ones.
@@ -30,7 +31,7 @@ This repository contains the Blender-side MCB bridge addon. It is a generic cust
 Run before packaging (Python 3.11, the oldest Python of the supported Blender versions):
 
 ```powershell
-python -m py_compile .\mcb_blender\__init__.py .\mcb_blender\properties.py .\mcb_blender\sync.py .\mcb_blender\launch.py .\mcb_blender\xmuscle_bridge.py .\mcb_blender\exporter.py .\mcb_blender\ui.py
+python -m py_compile .\mcb_blender\__init__.py .\mcb_blender\properties.py .\mcb_blender\sync.py .\mcb_blender\launch.py .\mcb_blender\live.py .\mcb_blender\xmuscle_bridge.py .\mcb_blender\exporter.py .\mcb_blender\ui.py
 ```
 
 Then build and sync (the build validates the manifest):

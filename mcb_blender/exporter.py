@@ -26,6 +26,8 @@ FBX_TRANSPORT_FORMAT = "FBX"
 
 _IS_EXPORTING = False
 _SAVE_SYNC_TIMER_PENDING = False
+# Called with (context, mesh_objects) after each successful export (the live link re-baselines those meshes).
+EXPORT_LISTENERS = []
 
 
 def _normalize_unity_path(path):
@@ -747,6 +749,8 @@ def _send_to_unity(context, requested_mesh_names=None, automatic=False):
     if warnings:
         settings.last_status += " (" + str(len(warnings)) + " XMuscle warning(s))"
     _mark_meshes_clean(context.scene, settings, mesh_objects)
+    for listener in EXPORT_LISTENERS:
+        listener(context, mesh_objects)
     return True, settings.last_status
 
 
@@ -943,6 +947,27 @@ def _objects_for_shape_keys(scene, shape_keys):
     ]
 
 
+def is_exporting():
+    return _IS_EXPORTING
+
+
+def updated_mesh_names(scene, depsgraph):
+    """Names of the (non-muscle) mesh objects whose geometry this depsgraph update changed."""
+    names = set()
+    for update in depsgraph.updates:
+        data_block = update.id
+        if isinstance(data_block, bpy.types.Object):
+            if not getattr(update, "is_updated_geometry", True):
+                continue
+            if data_block.type == "MESH" and not getattr(data_block, "Muscle_XID", False):
+                names.add(data_block.name)
+        elif isinstance(data_block, bpy.types.Mesh):
+            names.update(obj.name for obj in _objects_for_mesh_data(scene, data_block))
+        elif isinstance(data_block, bpy.types.Key):
+            names.update(obj.name for obj in _objects_for_shape_keys(scene, data_block))
+    return names
+
+
 @persistent
 def _depsgraph_update_handler(scene, depsgraph):
     if _IS_EXPORTING or scene is None:
@@ -953,19 +978,7 @@ def _depsgraph_update_handler(scene, depsgraph):
     if time.time() < getattr(settings, "sync_on_save_ignore_until", 0.0):
         return
 
-    dirty_names = set()
-    for update in depsgraph.updates:
-        data_block = update.id
-        if isinstance(data_block, bpy.types.Object):
-            if not getattr(update, "is_updated_geometry", True):
-                continue
-            if data_block.type == "MESH" and not getattr(data_block, "Muscle_XID", False):
-                dirty_names.add(data_block.name)
-        elif isinstance(data_block, bpy.types.Mesh):
-            dirty_names.update(obj.name for obj in _objects_for_mesh_data(scene, data_block))
-        elif isinstance(data_block, bpy.types.Key):
-            dirty_names.update(obj.name for obj in _objects_for_shape_keys(scene, data_block))
-
+    dirty_names = updated_mesh_names(scene, depsgraph)
     if dirty_names:
         _mark_dirty_meshes(scene, dirty_names)
 

@@ -42,6 +42,11 @@ class MCB_Settings(bpy.types.PropertyGroup):
         description="Rebake muscle shape keys even when previous baked keys exist",
         default=False,
     )
+    live_preview: BoolProperty(
+        name="Live preview in Unity",
+        description="Stream edits of the target meshes to Unity MCB, which shows them on the avatar at once (nothing is saved in Unity until the edit is committed)",
+        default=True,
+    )
     sync_on_save: BoolProperty(
         name="Sync on Save",
         description="Automatically sync modified MCB meshes to Unity after saving the Blender file",

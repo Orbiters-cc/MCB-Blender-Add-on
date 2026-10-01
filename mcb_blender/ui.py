@@ -6,7 +6,7 @@ import bpy.utils.previews as previews
 
 from .sync import get_pending_sync_offer, get_sync_session
 from .exporter import dirty_mesh_count, dirty_mesh_name_set, export_mesh_report
-from . import xmuscle_bridge
+from . import live, xmuscle_bridge
 
 _PREVIEWS = None
 
@@ -99,6 +99,19 @@ def _draw_brand_header(layout, settings):
         layout.separator()
 
 
+def _draw_live(layout, settings):
+    layout.prop(settings, "live_preview")
+    if not settings.live_preview:
+        return
+    state, port, statuses = live.link_state()
+    if state == "connected":
+        layout.label(text="Live: connected to Unity (port " + str(port) + ")", icon="LINKED")
+    else:
+        layout.label(text="Live: " + state, icon="TIME")
+    for identifier, status in sorted(statuses.items())[:6]:
+        layout.label(text=identifier + ": " + status["message"], icon="CHECKMARK" if status["live"] else "INFO")
+
+
 class MCB_PT_panel(bpy.types.Panel):
     bl_label = "MCB"
     bl_idname = "MCB_PT_panel"
@@ -128,6 +141,7 @@ class MCB_PT_panel(bpy.types.Panel):
                 col.label(text="Project: " + Path(settings.blender_project_path).name, icon="FILE_BLEND")
             if settings.unity_exports_path:
                 col.label(text="Exports: " + settings.unity_exports_path, icon="FILE_FOLDER")
+            _draw_live(col, settings)
         elif pending_offer:
             wait_row = col.row(align=True)
             wait_row.operator("mcb.check_magic_sync_response", text="", icon="FILE_REFRESH")

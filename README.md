@@ -22,6 +22,10 @@ To install it by hand, use the same command or `Edit > Preferences > Get Extensi
 
 You can also start from Blender: click `Start Sync`, then click `Sync with Blender` in Unity. The extension exports FBX files with shape keys preserved, writes a manifest package into Unity's sync inbox, and drops a `ready.json` marker. Unity then imports the package, creates `.fbx.old` when needed, overwrites the matched target FBX, and refreshes the SkinnedMeshRenderer paths Unity provided during sync.
 
+## Live preview
+
+While a Magic Sync session is connected and `Live preview in Unity` is on (the default), the extension also connects to Unity MCB on this computer (the port is in the session and in the inbox's `live.json`) and streams the target meshes as you edit them: Unity shows the edit on the avatar about 200 ms after you stop, without writing anything to assets. Unity's `Commit` runs the usual export, `Revert` puts the avatar's meshes back. Adding or removing vertices stops the preview of that mesh until the next export. What is streamed is the base shape, or the shape key being edited in Edit or Sculpt mode; the wire protocol is specified in Unity MCB's `BlenderLiveProtocol.cs`.
+
 ## XMuscle Orbit Helper
 
 If XMuscle Orbit Helper (API 1) is enabled and `Include XMuscle deformation` is on, every export asks it to bake the X-Muscles linked to the exported target meshes (only missing bakes, all of them with `Force muscle rebake`) and writes what it returns to `manifest.xmuscle`: `{apiVersion, muscles: [{name, bone, axis, samples: [{shapeKey, mesh, angleDeg}]}], warnings}`. Without the toolkit, `xmuscle` is `null`. The heartbeat tells Unity whether the X-Muscle System (`xmusclesystem`) and XMuscle Orbit Helper are installed and enabled, and their versions.

@@ -21,3 +21,4 @@ license = [
 [permissions]
 files = "Export custom base FBX files and sync data to the Unity project"
 clipboard = "Exchange Magic Sync connection data with Unity"
+network = "Stream mesh edits to Unity MCB on this computer (127.0.0.1 only)"
