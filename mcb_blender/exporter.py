@@ -21,6 +21,9 @@ SAVE_SYNC_DELAY_SECONDS = 1.5
 TARGET_FBX_PROP = "mcb_target_fbx_path"
 TARGET_MESH_PROP = "mcb_target_mesh_name"
 TARGET_RENDERER_PROP = "mcb_target_renderer_name"
+NATIVE_MESH_PAYLOAD_CAPABILITY = "nativeMeshPayload"
+NATIVE_MESH_PAYLOAD_FORMAT = "MCB_NATIVE_MESH_PAYLOAD"
+FBX_TRANSPORT_FORMAT = "FBX"
 
 _IS_EXPORTING = False
 _SAVE_SYNC_TIMER_PENDING = False
@@ -32,6 +35,19 @@ def _normalize_unity_path(path):
 
 def _target_path_matches(left, right):
     return bool(left and right and _normalize_unity_path(left) == _normalize_unity_path(right))
+
+
+def _session_capabilities(session):
+    values = session.get("capabilities") or []
+    return {str(value) for value in values if value}
+
+
+def _use_native_mesh_payload(session):
+    capabilities = _session_capabilities(session)
+    return bool(session.get("advancedMeshBlenderLink")) or (
+        NATIVE_MESH_PAYLOAD_CAPABILITY in capabilities
+        or NATIVE_MESH_PAYLOAD_FORMAT in capabilities
+    )
 
 
 def _mesh_tag_value(obj, key):
@@ -484,6 +500,25 @@ def _filter_meshes_for_requests(session, mesh_objects, requested_mesh_names):
     return group_meshes, display_names, _manifest_mesh_names(requested)
 
 
+def _filter_native_meshes_for_requests(session, mesh_objects, requested_mesh_names):
+    requested_names = [name for name in (requested_mesh_names or []) if name]
+    if not requested_names:
+        return mesh_objects, [], []
+
+    selected = []
+    display_names = []
+    requested_set = set(requested_names)
+    for obj in mesh_objects:
+        if requested_set.intersection(_mesh_candidate_names(obj)):
+            selected.append(obj)
+            display_names.append(obj.name)
+
+    if not selected:
+        return [], [], []
+
+    return selected, display_names, _manifest_mesh_names(selected)
+
+
 def _manifest_mesh_names(mesh_objects):
     names = []
     seen = set()
@@ -583,8 +618,12 @@ def _send_to_unity(context, requested_mesh_names=None, automatic=False):
     if not inbox_path:
         return False, "Magic Sync session has no Unity inbox"
 
+    use_native_mesh_payload = _use_native_mesh_payload(session)
     mesh_objects, missing_mesh_names = find_export_meshes(context, session)
-    mesh_objects, requested_display_names, refresh_mesh_names = _filter_meshes_for_requests(session, mesh_objects, requested_mesh_names)
+    if use_native_mesh_payload:
+        mesh_objects, requested_display_names, refresh_mesh_names = _filter_native_meshes_for_requests(session, mesh_objects, requested_mesh_names)
+    else:
+        mesh_objects, requested_display_names, refresh_mesh_names = _filter_meshes_for_requests(session, mesh_objects, requested_mesh_names)
     if not mesh_objects:
         return False, "No Blender meshes matched the Unity target FBX renderer list"
 
@@ -619,6 +658,8 @@ def _send_to_unity(context, requested_mesh_names=None, automatic=False):
     mesh_names = _manifest_mesh_names(mesh_objects)
     mesh_groups = _mesh_groups_by_target(session, mesh_objects)
     model_entries = []
+    transport_format = NATIVE_MESH_PAYLOAD_FORMAT if use_native_mesh_payload else FBX_TRANSPORT_FORMAT
+    unity_import_mode = "nativeMeshPayload" if use_native_mesh_payload else "fbxReplace"
     _IS_EXPORTING = True
     try:
         for index, group in enumerate(mesh_groups, start=1):
@@ -633,6 +674,9 @@ def _send_to_unity(context, requested_mesh_names=None, automatic=False):
                     "role": "CUSTOM_BASE",
                     "path": "models/" + file_name,
                     "targetFbxPath": target_fbx_path,
+                    "transportFormat": transport_format,
+                    "unityImportMode": unity_import_mode,
+                    "payloadSourceFormat": FBX_TRANSPORT_FORMAT,
                     "primaryBodyObject": body_obj.name,
                     "armatureObject": armature_obj.name if armature_obj else "",
                     "meshNames": refresh_mesh_names or _manifest_mesh_names(group_meshes),
@@ -669,6 +713,12 @@ def _send_to_unity(context, requested_mesh_names=None, automatic=False):
         "models": model_entries,
         "blendshapes": [],
         "xmuscle": xmuscle_result,
+        "advancedMeshBlenderLink": use_native_mesh_payload,
+        "transport": {
+            "format": transport_format,
+            "unityImportMode": unity_import_mode,
+            "payloadSourceFormat": FBX_TRANSPORT_FORMAT,
+        },
     }
 
     manifest_path = export_dir / "manifest.json"
@@ -688,13 +738,14 @@ def _send_to_unity(context, requested_mesh_names=None, automatic=False):
 
     warnings = xmuscle_result.get("warnings") or []
     prefix = "Auto-synced " if automatic else "Synced "
+    transport_label = "advanced mesh transfer(s)" if use_native_mesh_payload else "FBX export(s)"
     if requested_display_names:
         display = ", ".join(requested_display_names[:3])
         if len(requested_display_names) > 3:
             display += " +" + str(len(requested_display_names) - 3) + " more"
-        settings.last_status = prefix + display + " via " + str(len(mesh_objects)) + " mesh(es) across " + str(len(model_entries)) + " FBX export(s) to Unity MCB inbox: " + str(export_dir)
+        settings.last_status = prefix + display + " via " + str(len(mesh_objects)) + " mesh(es) across " + str(len(model_entries)) + " " + transport_label + " to Unity MCB inbox: " + str(export_dir)
     else:
-        settings.last_status = prefix + str(len(mesh_objects)) + " mesh(es) across " + str(len(model_entries)) + " FBX export(s) to Unity MCB inbox: " + str(export_dir)
+        settings.last_status = prefix + str(len(mesh_objects)) + " mesh(es) across " + str(len(model_entries)) + " " + transport_label + " to Unity MCB inbox: " + str(export_dir)
     if missing_mesh_names:
         settings.last_status += " (" + str(len(missing_mesh_names)) + " Unity target mesh name(s) not found in Blender)"
     if warnings:
