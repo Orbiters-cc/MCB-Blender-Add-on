@@ -106,7 +106,11 @@ def write_heartbeat(settings):
                 indent=2,
                 sort_keys=True,
             )
-        os.replace(temp_path, path)
+        try:
+            os.replace(temp_path, path)
+        except PermissionError:
+            # Unity is reading the last one right now: the next beat replaces it (not worth the add-on's status line).
+            return False
         return True
     except OSError as exc:
         settings.last_status = "Failed to write Blender heartbeat: " + str(exc)

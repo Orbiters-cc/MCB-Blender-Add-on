@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import bpy
+import numpy
 from bpy.app.handlers import persistent
 from bpy.props import StringProperty
 
@@ -829,6 +830,10 @@ def _set_dirty_signatures(settings, signatures):
 
 
 def _mesh_signature(mesh_obj):
+    """
+    A fingerprint of the mesh as it would export: its vertex positions and every shape key's (read in bulk: a body with
+    hundreds of shape keys takes a fraction of a second). Sculpt mode writes its strokes there too.
+    """
     data = getattr(mesh_obj, "data", None)
     digest = hashlib.sha256()
     digest.update((getattr(mesh_obj, "name", "") + "\n").encode("utf-8"))
@@ -837,16 +842,48 @@ def _mesh_signature(mesh_obj):
         return digest.hexdigest()
 
     digest.update(f"{len(data.vertices)}|{len(data.edges)}|{len(data.polygons)}\n".encode("utf-8"))
-    for vertex in data.vertices:
-        digest.update(f"{vertex.co.x:.6f},{vertex.co.y:.6f},{vertex.co.z:.6f};".encode("utf-8"))
+    positions = numpy.empty(len(data.vertices) * 3, dtype=numpy.float32)
+    data.vertices.foreach_get("co", positions)
+    digest.update(positions.tobytes())
 
     shape_keys = getattr(data, "shape_keys", None)
     if shape_keys is not None:
         for key in shape_keys.key_blocks:
             digest.update(f"\nkey:{key.name}|{key.value:.6f}|{len(key.data)}\n".encode("utf-8"))
-            for point in key.data:
-                digest.update(f"{point.co.x:.6f},{point.co.y:.6f},{point.co.z:.6f};".encode("utf-8"))
+            points = numpy.empty(len(key.data) * 3, dtype=numpy.float32)
+            key.data.foreach_get("co", points)
+            digest.update(points.tobytes())
     return digest.hexdigest()
+
+
+def changed_since_baseline(scene, settings):
+    """
+    The target meshes that no longer match their fingerprint from when the file opened or they were last exported:
+    edits the update tags miss (sculpt mode). A mesh without a fingerprint yet gets one now.
+    """
+    baseline = _load_dirty_signatures(settings)
+    changed = []
+    recorded = False
+    for obj in _target_scene_meshes(scene, settings):
+        signature = _mesh_signature(obj)
+        if obj.name not in baseline:
+            baseline[obj.name] = signature
+            recorded = True
+        elif baseline[obj.name] != signature:
+            changed.append(obj.name)
+    if recorded:
+        _set_dirty_signatures(settings, baseline)
+    return changed
+
+
+def mark_meshes_dirty(scene, mesh_names):
+    """Exported by the next save even though they weren't edited here (Unity's mesh isn't Blender's)."""
+    settings = getattr(scene, "mcb_blender", None) if scene else None
+    if settings is None or not mesh_names:
+        return
+    dirty = set(_dirty_mesh_names(settings))
+    if not dirty.issuperset(mesh_names):
+        _set_dirty_mesh_names(settings, dirty.union(mesh_names))
 
 
 def _target_scene_meshes(scene, settings):
@@ -898,11 +935,15 @@ def _mark_meshes_clean(scene, settings, mesh_objects):
     if scene is None or settings is None:
         return
     dirty = set(_dirty_mesh_names(settings))
+    # What Unity has now: the fingerprint the next save compares with.
+    baseline = _load_dirty_signatures(settings)
     for obj in mesh_objects or []:
         if obj is None:
             continue
         dirty.discard(obj.name)
+        baseline[obj.name] = _mesh_signature(obj)
     _set_dirty_mesh_names(settings, dirty)
+    _set_dirty_signatures(settings, baseline)
 
 
 def _mark_dirty_meshes(scene, mesh_names):
@@ -1017,7 +1058,7 @@ def _run_save_sync_timer():
     if settings is None or not settings.sync_on_save or not get_sync_session(settings):
         return None
 
-    dirty_names = sorted(dirty_mesh_name_set(settings, scene))
+    dirty_names = sorted(dirty_mesh_name_set(settings, scene).union(changed_since_baseline(scene, settings)))
     target_mesh_names = _target_scene_mesh_names(scene, settings)
     if target_mesh_names:
         dirty_names = [name for name in dirty_names if name in target_mesh_names]
@@ -1035,7 +1076,19 @@ def _run_save_sync_timer():
     return None
 
 
+@persistent
+def _load_post_handler(_dummy):
+    # The file as it opens is what the next save compares with (a file opened with older edits in it is told apart by
+    # Unity: its live link marks meshes that differ).
+    for scene in bpy.data.scenes:
+        settings = getattr(scene, "mcb_blender", None)
+        if settings is not None and get_sync_session(settings):
+            _set_dirty_signatures(settings, _target_mesh_signature_map(scene, settings))
+
+
 def register_save_handlers():
+    if _load_post_handler not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_load_post_handler)
     if _depsgraph_update_handler not in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.append(_depsgraph_update_handler)
     if _save_post_handler not in bpy.app.handlers.save_post:
@@ -1043,6 +1096,8 @@ def register_save_handlers():
 
 
 def unregister_save_handlers():
+    if _load_post_handler in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_load_post_handler)
     if _depsgraph_update_handler in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(_depsgraph_update_handler)
     if _save_post_handler in bpy.app.handlers.save_post:

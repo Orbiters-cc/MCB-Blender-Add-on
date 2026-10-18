@@ -20,19 +20,21 @@ import bmesh
 import bpy
 from bpy.app.handlers import persistent
 
-from . import exporter
+from . import exporter, textures
 from .sync import ADDON_VERSION, get_settings, get_sync_session
 
 LIVE_PROTOCOL_VERSION = 1
 MAGIC = 0x4C42434D
 HEADER = struct.Struct("<IBBHI")
-HELLO, REST, POSITIONS, TOPOLOGY, STATUS, COMMIT, BYE = range(1, 8)
+HELLO, REST, POSITIONS, TOPOLOGY, STATUS, COMMIT, BYE, TEXTURE = range(1, 9)
 MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
 SEND_DELAY_SECONDS = 0.2
 CONNECTED_TICK_SECONDS = 0.05
 IDLE_TICK_SECONDS = 0.5
 RECONNECT_DELAYS = (0.5, 1.0, 2.0, 4.0, 8.0)
 CONNECT_TIMEOUT_SECONDS = 3.0
+# Painter streams an image per stroke: only the newest of each channel loads, at most this often.
+TEXTURE_DELAY_SECONDS = 0.5
 
 
 class _Link:
@@ -57,6 +59,8 @@ class _Link:
         self.pending = {}       # object name -> time to send its positions
         self.status = {}        # mesh id -> {"live": bool, "message": str} from Unity
         self.commit_requested = False
+        self.textures = {}      # (mesh id, slot, channel) -> image path Unity forwarded from Painter, not loaded yet
+        self.next_textures = 0.0
 
 
 _link = _Link()
@@ -81,6 +85,17 @@ def base_positions(obj):
     return positions
 
 
+def edited_key(obj):
+    """The shape key being edited (Edit or Sculpt mode on a key other than the reference one), or ""."""
+    keys = obj.data.shape_keys
+    index = obj.active_shape_key_index
+    if obj.mode in ("EDIT", "SCULPT") and keys is not None and 0 < index < len(keys.key_blocks):
+        block = keys.key_blocks[index]
+        if block != keys.reference_key:
+            return block.name
+    return ""
+
+
 def edited_positions(obj):
     """The layer being edited: the active shape key in Edit or Sculpt mode on a non-reference key, else the base shape."""
     data = obj.data
@@ -88,14 +103,12 @@ def edited_positions(obj):
         # The edit mesh holds the shape being edited (the active key's, or the base one).
         edit_mesh = bmesh.from_edit_mesh(data)
         return array.array("f", itertools.chain.from_iterable(vertex.co for vertex in edit_mesh.verts))
-    keys = data.shape_keys
-    index = obj.active_shape_key_index
-    if obj.mode == "SCULPT" and keys is not None and 0 < index < len(keys.key_blocks):
-        block = keys.key_blocks[index]
-        if block != keys.reference_key:
-            positions = array.array("f", bytes(12 * len(block.data)))
-            block.data.foreach_get("co", positions)
-            return positions
+    key = edited_key(obj)
+    if key:
+        block = data.shape_keys.key_blocks[key]
+        positions = array.array("f", bytes(12 * len(block.data)))
+        block.data.foreach_get("co", positions)
+        return positions
     return base_positions(obj)
 
 
@@ -107,9 +120,14 @@ def _frame(frame_type, payload=b""):
     return HEADER.pack(MAGIC, LIVE_PROTOCOL_VERSION, frame_type, len(_link.token), len(payload)) + _link.token + payload
 
 
-def _mesh_payload(identifier, positions):
+def _mesh_payload(identifier, positions, shape_key=None):
+    """Rest and Positions; Positions of a shape key end with its name (Unity takes its own blendshape of that name off)."""
     name = identifier.encode("utf-8")
-    return struct.pack("<H", len(name)) + name + struct.pack("<I", len(positions) // 3) + positions.tobytes()
+    payload = struct.pack("<H", len(name)) + name + struct.pack("<I", len(positions) // 3) + positions.tobytes()
+    if shape_key is not None:
+        key = shape_key.encode("utf-8")
+        payload += struct.pack("<H", len(key)) + key
+    return payload
 
 
 def _topology_payload(identifier, vertex_count):
@@ -167,6 +185,7 @@ def close(reason="off", send_bye=True):
     _link.state = reason
     _link.status.clear()
     _link.commit_requested = False
+    _link.textures.clear()
 
 
 def _forget_session():
@@ -239,7 +258,7 @@ def _send_rest(obj, keep_existing=False):
     rest = _link.rest[identifier]
     _link.topology.discard(identifier)
     _link.edited.discard(identifier)
-    _link.sent[identifier] = _crc(rest)
+    _link.sent[identifier] = (_crc(rest), "")
     _queue(REST, _mesh_payload(identifier, rest))
 
 
@@ -249,20 +268,21 @@ def _send_positions(obj):
     if rest is None or identifier in _link.topology:
         return
     positions = edited_positions(obj)
+    shape_key = edited_key(obj)
     if len(positions) != len(rest):
         _link.topology.add(identifier)
         _link.edited.add(identifier)
         _queue(TOPOLOGY, _topology_payload(identifier, len(positions) // 3))
         return
-    crc = _crc(positions)
+    crc = (_crc(positions), shape_key)
     if _link.sent.get(identifier) == crc:
         return
     _link.sent[identifier] = crc
-    if crc == _crc(rest):
+    if crc == (_crc(rest), ""):
         _link.edited.discard(identifier)
     else:
         _link.edited.add(identifier)
-    _queue(POSITIONS, _mesh_payload(identifier, positions))
+    _queue(POSITIONS, _mesh_payload(identifier, positions, shape_key))
 
 
 def _flush():
@@ -314,23 +334,54 @@ def _on_frame(frame_type, payload):
     if frame_type == STATUS:
         try:
             status = json.loads(payload.decode("utf-8"))
-            _link.status[status["meshId"]] = {"live": bool(status.get("live")), "message": str(status.get("message", ""))}
+            identifier = status["meshId"]
+            differs = bool(status.get("differs"))
+            _link.status[identifier] = {"live": bool(status.get("live")), "message": str(status.get("message", "")), "differs": differs}
         except (ValueError, KeyError, TypeError):
             return
+        # Unity's mesh isn't this one (edits from before it was last applied): the next save exports it.
+        if differs:
+            scene = bpy.context.scene
+            settings = getattr(scene, "mcb_blender", None) if scene else None
+            if settings is not None:
+                session = get_sync_session(settings)
+                exporter.mark_meshes_dirty(scene, [obj.name for obj in target_meshes(bpy.context, session) if mesh_id(obj) == identifier])
         _redraw()
     elif frame_type == COMMIT:
         _link.commit_requested = True
+    elif frame_type == TEXTURE:
+        try:
+            texture = json.loads(payload.decode("utf-8"))
+            _link.textures[(str(texture["meshId"]), int(texture["slot"]), str(texture["channel"]))] = str(texture["path"])
+        except (ValueError, KeyError, TypeError):
+            return
     elif frame_type == BYE:
         _connect_failed("Unity closed the live link; reconnecting")
 
 
 def _commit(context, settings):
-    """Unity's Commit: the usual export of the meshes edited since their rest (all target meshes when none was)."""
+    """
+    Unity's Commit: the usual export of the meshes edited since their rest or that Unity says differ from its own (all
+    target meshes when none is).
+    """
     session = get_sync_session(settings)
-    names = [obj.name for obj in target_meshes(context, session) if mesh_id(obj) in _link.edited]
+    names = [obj.name for obj in target_meshes(context, session)
+             if mesh_id(obj) in _link.edited or _link.status.get(mesh_id(obj), {}).get("differs")]
     ok, message = exporter._send_to_unity(context, requested_mesh_names=names or None)
     settings.last_status = ("Committed from Unity: " if ok else "Commit from Unity failed: ") + message
     print("[MCB] " + settings.last_status)
+
+
+def _apply_textures(context, session):
+    """The newest image of each channel Unity forwarded from Painter, on the material it paints."""
+    objects = {}
+    for obj in target_meshes(context, session):
+        objects.setdefault(mesh_id(obj), obj)
+    for (identifier, slot, channel), path in _link.textures.items():
+        obj = objects.get(identifier)
+        if obj is not None:
+            textures.apply(obj, slot, channel, path)
+    _link.textures.clear()
 
 
 def _on_export(context, mesh_objects):
@@ -376,6 +427,9 @@ def tick():
     if _link.commit_requested:
         _link.commit_requested = False
         _commit(context, settings)
+    if _link.textures and not exporter.is_exporting() and time.monotonic() >= _link.next_textures:
+        _link.next_textures = time.monotonic() + TEXTURE_DELAY_SECONDS
+        _apply_textures(context, session)
     if _link.pending and not exporter.is_exporting():
         now = time.monotonic()
         due = [name for name, when in _link.pending.items() if when <= now]
